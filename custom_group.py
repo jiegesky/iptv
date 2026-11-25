@@ -16,7 +16,7 @@ SOURCES = [
     HOST + "YueChan/Live/main/APTV.m3u"
 ]
 
-# 2. 严格保留你的自定义频道分组规则
+# 2. 自定义频道分组规则与 Emoji
 group_rules = [
     {
         "group_name": "📡 央视官方频道",
@@ -28,7 +28,7 @@ group_rules = [
     },
     {
         "group_name": "🏠 全国地方台",
-        "keywords": ["卫视",  "影视",  "都市"]
+        "keywords": ["卫视", "影视", "都市"]
     },
     {
         "group_name": "🏝️ 港澳台频道",
@@ -54,14 +54,11 @@ def match_group(channel_name):
     return None
 
 def natural_sort_key(item):
-    # 先按频道名自然排序，同名频道按响应耗时从快到慢排序（秒开线路排最前）
-    name = item
-    latency = item
+    name, clean_info, url, latency = item
     return ([int(t) if t.isdigit() else t.lower() for t in re.split(r'(\d+)', name)], latency)
 
 def check_stream(item):
     group, name, clean_info, url = item
-    # 剔除纯 IPv6 地址（避免路由器未开 IPv6 导致一直转圈）
     if "://[" in url:
         return None
     start = time.time()
@@ -69,14 +66,12 @@ def check_stream(item):
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
         with urllib.request.urlopen(req, timeout=2.0) as resp:
             if resp.status in (200, 206, 301, 302):
-                # 尝试读取前 512 字节确保视频流真实有数据输出
                 chunk = resp.read(512)
                 if chunk:
                     latency = time.time() - start
                     return (group, name, clean_info, url, latency)
     except urllib.error.HTTPError as e:
         if e.code == 403:
-            # 仅放行国内大厂 CDN 的海外IP拦截，赋予较高延迟权重排在直连有效源后面
             return (group, name, clean_info, url, 9.9)
     except Exception:
         pass
@@ -90,10 +85,11 @@ def main():
         try:
             req = urllib.request.Request(src, headers={'User-Agent': 'Mozilla/5.0'})
             lines = urllib.request.urlopen(req, timeout=10).read().decode('utf-8', errors='ignore').splitlines()
-            for i in range(len(lines)):
-                line = lines[i].strip()
+            total_lines = len(lines)
+            for idx, raw_line in enumerate(lines):
+                line = raw_line.strip()
                 if line.startswith("#EXTINF"):
-                    url = lines[i+1].strip() if i + 1 < len(lines) else ""
+                    url = lines[idx + 1].strip() if idx + 1 < total_lines else ""
                     if not url.startswith("http") or url in seen_urls:
                         continue
                     name = line.split(",")[-1].strip()
@@ -107,10 +103,9 @@ def main():
                             clean_info = clean_info.replace("#EXTINF:-1", f'#EXTINF:-1 group-title="{target_group}"')
                         candidates.append((target_group, name, clean_info, url))
                 elif "," in line and "#genre#" not in line and not line.startswith("#"):
-                    parts = line.split(",", 1)
-                    if len(parts) < 2:
-                        continue
-                    name, url = parts.strip(), parts.strip()
+                    name, sep, url = line.partition(",")
+                    name = name.strip()
+                    url = url.strip()
                     if not url.startswith("http") or url in seen_urls or EXCLUDE.search(name):
                         continue
                     target_group = match_group(name)
@@ -127,8 +122,7 @@ def main():
             if res:
                 tested_items.append(res)
 
-    # 全局按响应速度从快到慢排序，保证每个台优先挑出最快的 5 条
-    tested_items.sort(key=lambda x: x)
+    tested_items.sort(key=lambda x: x[-1])
 
     valid_groups = {g: [] for g in group_order}
     channel_counts = {}
