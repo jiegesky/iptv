@@ -3,7 +3,7 @@ import urllib.error
 import re
 import concurrent.futures
 
-HOST = "https://raw" + ".githubusercontent" + ".com/"
+HOST = "https://raw.githubusercontent.com/"
 
 
 
