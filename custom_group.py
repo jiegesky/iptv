@@ -6,7 +6,7 @@ import concurrent.futures
 
 HOST = "https://raw.githubusercontent.com/"
 
-# 1. 双引擎精选源（国内央视/卫视主力源 + 港澳台高可用专线源）
+# 1. 双引擎精选源（国内央视/卫视主力源 + 港台高可用官方/YouTube源）
 SOURCES = [
     HOST + "best-fan/iptv-sources/main/output/result.m3u",
     HOST + "Guovin/iptv-api/gd/output/result.m3u",
@@ -17,14 +17,16 @@ SOURCES = [
     HOST + "mytv-android/mytv-android.github.io/main/tv.m3u",
     HOST + "Kimentanm/aptv/master/m3u/iptv.m3u",
     HOST + "suxuang/myIPTV/main/ipv4.m3u",
-    HOST + "YueChan/Live/main/APTV.m3u"
+    HOST + "YueChan/Live/main/APTV.m3u",
+    HOST + "iptv-org/iptv/master/streams/hk.m3u",
+    HOST + "iptv-org/iptv/master/streams/tw.m3u"
 ]
 
-# 2. 自定义频道分组规则（已补充港台电视、有线、Now等港澳高频关键词）
+# 2. 自定义频道分组规则与 Emoji
 group_rules = [
     {
         "group_name": "📡 央视官方频道",
-        "keywords": ["CCTV-1", "CCTV-2", "CCTV-3", "CCTV-4", "CCTV-5", "CCTV-5+", "CCTV-6", "CCTV-7", "CCTV-8", "CCTV-9", "CCTV-10", "CCTV-11", "CCTV-12", "CCTV-13", "CCTV-14", "CCTV-15", "CCTV-16", "CCTV-17", "CCTV"]
+        "keywords": ["CCTV"]
     },
     {
         "group_name": "🎮 杰哥咪咕直播",
@@ -32,7 +34,7 @@ group_rules = [
     },
     {
         "group_name": "🏠 全国地方台",
-        "keywords": ["卫视", "影视", "都市"]
+        "keywords": ["卫视","影视","都市"]
     },
     {
         "group_name": "🏝️ 港澳台频道",
@@ -46,8 +48,47 @@ group_rules = [
 
 group_order = ["📡 央视官方频道", "🎮 杰哥咪咕直播", "🏠 全国地方台", "🏝️ 港澳台频道", "🏆 体育直播频道"]
 
-EXCLUDE = re.compile(r"(购物|导视|测试|广播|电台|教育|少儿|动画|卡通|戏曲|轮播|解说|宣传|成人|色播|福利)", re.I)
+EXCLUDE = re.compile(r"(购物|导视|测试|广播|电台|教育|少儿|动画|卡通|戏曲|轮播|解说|宣传|成人|色播|福利|中学生|老故事|怀旧|第一剧场|风云剧场|文化精品|女性时尚|兵器|世界地理|卫生健康|发现之旅)", re.I)
 MAX_LINES_PER_CHANNEL = 5
+
+def normalize_channel_name(group, raw_name):
+    """统一合并央视及港澳台高频频道名称，消除重复方块"""
+    name = raw_name.strip()
+    upper = name.upper()
+    
+    if group == "📡 央视官方频道":
+        if "欧洲" in name or "美洲" in name:
+            return None
+        if re.search(r"CCTV[\s\-_]*5\+", upper):
+            return "CCTV-5+"
+        m = re.search(r"CCTV[\s\-_]*(\d+)", upper)
+        if m:
+            num = int(m.group(1))
+            if 1 <= num <= 17:
+                return f"CCTV-{num}"
+        return None
+
+    if group == "🏝️ 港澳台频道":
+        # 去除清晰度后缀，合并同名港台频道
+        clean = re.sub(r'[\[\(（【].*?[\]\)）】]', '', name)
+        clean = re.sub(r'(高清|超清|标清|4K|HD|FHD|1080P|720P|备用|线路\d+)', '', clean, flags=re.I).strip()
+        if "翡翠" in clean:
+            return "TVB翡翠台"
+        if "明珠" in clean:
+            return "TVB明珠台"
+        if "凤凰中文" in clean:
+            return "凤凰卫视中文台"
+        if "凤凰资讯" in clean:
+            return "凤凰卫视资讯台"
+        if "凤凰香港" in clean:
+            return "凤凰卫视香港台"
+        if "VIUTV" in clean.upper() and "96" not in clean:
+            return "ViuTV"
+        if "HOY" in clean.upper() and "77" in clean or "HOY TV" in clean.upper():
+            return "HOY TV"
+        return clean if clean else name
+
+    return name
 
 def match_group(channel_name):
     name_upper = channel_name.upper()
@@ -59,15 +100,19 @@ def match_group(channel_name):
 
 def natural_sort_key(item):
     name, clean_info, url, latency = item
-    return ([int(t) if t.isdigit() else t.lower() for t in re.split(r'(\d+)', name)], latency)
+    sort_name = name.replace("CCTV-5+", "CCTV-5.5")
+    return ([int(t) if t.isdigit() else t.lower() for t in re.split(r'(\d+\.?\d*)', sort_name)], latency)
 
 def check_stream(item):
     group, name, clean_info, url = item
-    if "://[" in url or "$" in url or "|" in url:
+    # 剔除纯 IPv6、带特殊加密参数及容易在普通播放器报错的流
+    if "://[" in url or "$" in url or "|" in url or "php?" in url.lower():
         return None
     start = time.time()
     try:
-        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+        req = urllib.request.Request(url, headers={
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        })
         with urllib.request.urlopen(req, timeout=2.5) as resp:
             if resp.status in (200, 206, 301, 302):
                 content_type = resp.headers.get("Content-Type", "").lower()
@@ -76,10 +121,14 @@ def check_stream(item):
                 chunk = resp.read(512)
                 if not chunk or b"<html" in chunk.lower() or b"<!doctype" in chunk.lower():
                     return None
+                # 针对 M3U8 列表进一步校验是否包含有效视频分片标签
+                if b"#EXTM3U" in chunk and b"#EXT-X-ERROR" in chunk:
+                    return None
                 latency = time.time() - start
                 return (group, name, clean_info, url, latency)
     except urllib.error.HTTPError as e:
-        if e.code == 403:
+        # 仅对国内央视/卫视放行 403，港台源如果 403 说明海外也打不开直接剔除
+        if e.code == 403 and group in ("📡 央视官方频道", "🏠 全国地方台", "🎮 杰哥咪咕直播"):
             return (group, name, clean_info, url, 9.9)
     except Exception:
         pass
@@ -100,27 +149,35 @@ def main():
                     url = lines[idx + 1].strip() if idx + 1 < total_lines else ""
                     if not url.startswith("http") or url in seen_urls:
                         continue
-                    name = line.split(",")[-1].strip()
-                    if EXCLUDE.search(name):
+                    raw_name = line.split(",")[-1].strip()
+                    if EXCLUDE.search(raw_name):
                         continue
-                    target_group = match_group(name)
+                    target_group = match_group(raw_name)
                     if target_group:
+                        std_name = normalize_channel_name(target_group, raw_name)
+                        if not std_name:
+                            continue
                         seen_urls.add(url)
                         clean_info = re.sub(r'group-title="[^"]*"', f'group-title="{target_group}"', line)
                         if 'group-title=' not in clean_info:
                             clean_info = clean_info.replace("#EXTINF:-1", f'#EXTINF:-1 group-title="{target_group}"')
-                        candidates.append((target_group, name, clean_info, url))
+                        prefix = clean_info.rsplit(",", 1)[0]
+                        clean_info = f"{prefix},{std_name}"
+                        candidates.append((target_group, std_name, clean_info, url))
                 elif "," in line and "#genre#" not in line and not line.startswith("#"):
-                    name, sep, url = line.partition(",")
-                    name = name.strip()
+                    raw_name, sep, url = line.partition(",")
+                    raw_name = raw_name.strip()
                     url = url.strip()
-                    if not url.startswith("http") or url in seen_urls or EXCLUDE.search(name):
+                    if not url.startswith("http") or url in seen_urls or EXCLUDE.search(raw_name):
                         continue
-                    target_group = match_group(name)
+                    target_group = match_group(raw_name)
                     if target_group:
+                        std_name = normalize_channel_name(target_group, raw_name)
+                        if not std_name:
+                            continue
                         seen_urls.add(url)
-                        clean_info = f'#EXTINF:-1 group-title="{target_group}",{name}'
-                        candidates.append((target_group, name, clean_info, url))
+                        clean_info = f'#EXTINF:-1 group-title="{target_group}",{std_name}'
+                        candidates.append((target_group, std_name, clean_info, url))
         except Exception as e:
             print(f"跳过源 {src}: {e}")
 
