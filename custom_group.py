@@ -5,6 +5,7 @@ import concurrent.futures
 
 HOST = "https://githubusercontent.com"
 
+
 # 1. 上游精选源列表（融合 mafly 高质量源 + 公共稳定源，兼容 .m3u 与 .txt）
 SOURCES = [
     HOST + "mhmdxahmd/mafly/main/MAfly1/mafly.m3u",
