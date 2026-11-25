@@ -6,18 +6,15 @@ import concurrent.futures
 
 HOST = "https://raw.githubusercontent.com/"
 
-# 1. 双引擎精选源（国内央视/卫视主力源 + 港台高可用官方/YouTube源）
+# 1. 纯净高可用源列表（已剔除 404 失效源，仅保留存活的高速双引擎源）
 SOURCES = [
-    HOST + "best-fan/iptv-sources/main/output/result.m3u",
     HOST + "Guovin/iptv-api/gd/output/result.m3u",
     HOST + "vbskycn/iptv/master/tv/iptv4.m3u",
     HOST + "mhmdxahmd/mafly/main/MAfly1/mafly.m3u",
     HOST + "mhmdxahmd/mafly/main/youtube.m3u",
     HOST + "mhmdxahmd/mafly/main/%E5%90%84TVBOX/4gtv.m3u",
-    HOST + "mytv-android/mytv-android.github.io/main/tv.m3u",
     HOST + "Kimentanm/aptv/master/m3u/iptv.m3u",
     HOST + "suxuang/myIPTV/main/ipv4.m3u",
-    HOST + "YueChan/Live/main/APTV.m3u",
     HOST + "iptv-org/iptv/master/streams/hk.m3u",
     HOST + "iptv-org/iptv/master/streams/tw.m3u"
 ]
@@ -34,7 +31,7 @@ group_rules = [
     },
     {
         "group_name": "🏠 全国地方台",
-        "keywords": ["卫视", "影视"]
+        "keywords": ["卫视", "影视", "都市"]
     },
     {
         "group_name": "🏝️ 港澳台频道",
@@ -42,7 +39,7 @@ group_rules = [
     },
     {
         "group_name": "🏆 体育直播频道",
-        "keywords": ["体育", "足球", "篮球", "赛事", "风云足球", "劲爆体育", "五星体育", "广东体育", "高尔夫", "英超", "NBA", "爱尔达", "博斯"]
+        "keywords": ["体育", "足球", "篮球", "赛事", "风云足球", "劲爆体育", "五星体育", "广东体育",  "英超", "NBA",  "博斯"]
     }
 ]
 
@@ -98,9 +95,12 @@ def match_group(channel_name):
 
 def natural_sort_key(item):
     name, clean_info, url, latency = item
-    sort_name = name.replace("CCTV-5+", "CCTV-5.5")
-    parts = [int(t) if t.isdigit() else t.lower() for t in re.split(r'(\d+\.?\d*)', sort_name)]
-    return (parts, latency)
+    # 统一转换为纯字符串零填充键（如 CCTV-01, CCTV-05+, CCTV-10），彻底杜绝 int 与 str 比较报错
+    if name == "CCTV-5+":
+        sort_str = "cctv-05+"
+    else:
+        sort_str = re.sub(r'(\d+)', lambda m: m.group(1).zfill(4), name.lower())
+    return (sort_str, latency)
 
 def check_stream(item):
     group, name, clean_info, url = item
