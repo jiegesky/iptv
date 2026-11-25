@@ -6,17 +6,21 @@ import concurrent.futures
 
 HOST = "https://raw.githubusercontent.com/"
 
-# 1. 精选高可用高质量源
+# 1. 双引擎精选源（国内央视/卫视主力源 + 港澳台高可用专线源）
 SOURCES = [
+    HOST + "best-fan/iptv-sources/main/output/result.m3u",
+    HOST + "Guovin/iptv-api/gd/output/result.m3u",
+    HOST + "vbskycn/iptv/master/tv/iptv4.m3u",
     HOST + "mhmdxahmd/mafly/main/MAfly1/mafly.m3u",
     HOST + "mhmdxahmd/mafly/main/youtube.m3u",
     HOST + "mhmdxahmd/mafly/main/%E5%90%84TVBOX/4gtv.m3u",
-    HOST + "jiegesky/iptv/master/tv/iptv4.m3u",
+    HOST + "mytv-android/mytv-android.github.io/main/tv.m3u",
+    HOST + "Kimentanm/aptv/master/m3u/iptv.m3u",
     HOST + "suxuang/myIPTV/main/ipv4.m3u",
     HOST + "YueChan/Live/main/APTV.m3u"
 ]
 
-# 2. 自定义频道分组规则与 Emoji
+# 2. 自定义频道分组规则（已补充港台电视、有线、Now等港澳高频关键词）
 group_rules = [
     {
         "group_name": "📡 央视官方频道",
@@ -32,7 +36,7 @@ group_rules = [
     },
     {
         "group_name": "🏝️ 港澳台频道",
-        "keywords": ["翡翠台", "明珠台", "凤凰中文", "凤凰资讯", "澳视", "TVB", "纬来", "东森", "三立", "ViuTV", "本港", "HOY", "RTHK", "中天", "民视", "台视", "年代", "TVBS"]
+        "keywords": ["翡翠台", "明珠台", "无线", "J2", "TVB", "ViuTV", "HOY", "RTHK", "港台电视", "凤凰中文", "凤凰资讯", "凤凰香港", "凤凰", "澳视", "澳门", "有线", "Now", "纬来", "东森", "三立", "本港", "中天", "民视", "台视", "年代", "TVBS"]
     },
     {
         "group_name": "🏆 体育直播频道",
@@ -59,17 +63,21 @@ def natural_sort_key(item):
 
 def check_stream(item):
     group, name, clean_info, url = item
-    if "://[" in url:
+    if "://[" in url or "$" in url or "|" in url:
         return None
     start = time.time()
     try:
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req, timeout=2.0) as resp:
+        with urllib.request.urlopen(req, timeout=2.5) as resp:
             if resp.status in (200, 206, 301, 302):
+                content_type = resp.headers.get("Content-Type", "").lower()
+                if "text/html" in content_type:
+                    return None
                 chunk = resp.read(512)
-                if chunk:
-                    latency = time.time() - start
-                    return (group, name, clean_info, url, latency)
+                if not chunk or b"<html" in chunk.lower() or b"<!doctype" in chunk.lower():
+                    return None
+                latency = time.time() - start
+                return (group, name, clean_info, url, latency)
     except urllib.error.HTTPError as e:
         if e.code == 403:
             return (group, name, clean_info, url, 9.9)
