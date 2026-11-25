@@ -1,4 +1,5 @@
 import urllib.request
+import urllib.error
 import re
 import concurrent.futures
 
@@ -18,7 +19,7 @@ SOURCES = [
     HOST + "YueChan/Live/main/APTV.m3u"
 ]
 
-# 2. 严格保留你的自定义频道分组规则与 Emoji
+# 2. 自定义频道分组规则与 Emoji
 group_rules = [
     {
         "group_name": "📡 央视官方频道",
@@ -30,7 +31,7 @@ group_rules = [
     },
     {
         "group_name": "🏠 全国地方台",
-        "keywords": ["卫视", "综合", "新闻", "影视", "大湾区", "都市", "公共"]
+        "keywords": ["卫视", "综合", "新闻", "影视", "生活", "文旅", "珠江", "大湾区", "都市", "公共"]
     },
     {
         "group_name": "🏝️ 港澳台频道",
@@ -42,13 +43,9 @@ group_rules = [
     }
 ]
 
-# 3. 频道排序优先级
 group_order = ["📡 央视官方频道", "🎮 杰哥咪咕直播", "🏠 全国地方台", "🏝️ 港澳台频道", "🏆 体育直播频道"]
 
-# 4. 强力过滤词（剔除购物、色播、测试、广播等）
 EXCLUDE = re.compile(r"(购物|导视|测试|广播|电台|教育|少儿|动画|卡通|戏曲|轮播|解说|宣传|成人|色播|福利)", re.I)
-
-# 单台限流：每个频道最多保留 5 条有效线路
 MAX_LINES_PER_CHANNEL = 5
 
 def match_group(channel_name):
@@ -60,15 +57,19 @@ def match_group(channel_name):
     return None
 
 def natural_sort_key(item):
-    return [int(t) if t.isdigit() else t.lower() for t in re.split(r'(\d+)', item[0])]
+    return [int(t) if t.isdigit() else t.lower() for t in re.split(r'(\d+)', item)]
 
 def check_stream(item):
     group, name, clean_info, url = item
     try:
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req, timeout=4) as resp:
-            if resp.status == 200:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            if resp.status in (200, 206, 301, 302):
                 return item
+    except urllib.error.HTTPError as e:
+        # 放行 403/405（国内源防海外服务器探测，但在香港/内地播放器端可正常播放）
+        if e.code in (403, 405):
+            return item
     except Exception:
         pass
     return None
@@ -99,7 +100,7 @@ def main():
                         candidates.append((target_group, name, clean_info, url))
                 elif "," in line and "#genre#" not in line and not line.startswith("#"):
                     parts = line.split(",", 1)
-                    name, url = parts[0].strip(), parts[1].strip()
+                    name, url = parts.strip(), parts.strip()
                     if not url.startswith("http") or url in seen_urls or EXCLUDE.search(name):
                         continue
                     target_group = match_group(name)
@@ -127,7 +128,7 @@ def main():
     for group in group_order:
         valid_groups[group].sort(key=natural_sort_key)
 
-    epg = "https://gh-proxy.org" + HOST + "mhmdxahmd/mafly/main/youtube.xmltv"
+    epg = HOST + "mhmdxahmd/mafly/main/youtube.xmltv"
     with open("tv/my_live.m3u", "w", encoding="utf-8") as f:
         f.write(f'#EXTM3U x-tvg-url="{epg}"\n')
         for group in group_order:
