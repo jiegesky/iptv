@@ -34,7 +34,7 @@ group_rules = [
     },
     {
         "group_name": "🏠 全国地方台",
-        "keywords": ["卫视", "影视", "都市"]
+        "keywords": ["卫视",  "影视", "都市"]
     },
     {
         "group_name": "🏝️ 港澳台频道",
@@ -69,7 +69,6 @@ def normalize_channel_name(group, raw_name):
         return None
 
     if group == "🏝️ 港澳台频道":
-        # 去除清晰度后缀，合并同名港台频道
         clean = re.sub(r'[\[\(（【].*?[\]\)）】]', '', name)
         clean = re.sub(r'(高清|超清|标清|4K|HD|FHD|1080P|720P|备用|线路\d+)', '', clean, flags=re.I).strip()
         if "翡翠" in clean:
@@ -84,7 +83,7 @@ def normalize_channel_name(group, raw_name):
             return "凤凰卫视香港台"
         if "VIUTV" in clean.upper() and "96" not in clean:
             return "ViuTV"
-        if "HOY" in clean.upper() and "77" in clean or "HOY TV" in clean.upper():
+        if ("HOY" in clean.upper() and "77" in clean) or "HOY TV" in clean.upper():
             return "HOY TV"
         return clean if clean else name
 
@@ -105,7 +104,6 @@ def natural_sort_key(item):
 
 def check_stream(item):
     group, name, clean_info, url = item
-    # 剔除纯 IPv6、带特殊加密参数及容易在普通播放器报错的流
     if "://[" in url or "$" in url or "|" in url or "php?" in url.lower():
         return None
     start = time.time()
@@ -121,13 +119,11 @@ def check_stream(item):
                 chunk = resp.read(512)
                 if not chunk or b"<html" in chunk.lower() or b"<!doctype" in chunk.lower():
                     return None
-                # 针对 M3U8 列表进一步校验是否包含有效视频分片标签
                 if b"#EXTM3U" in chunk and b"#EXT-X-ERROR" in chunk:
                     return None
                 latency = time.time() - start
                 return (group, name, clean_info, url, latency)
     except urllib.error.HTTPError as e:
-        # 仅对国内央视/卫视放行 403，港台源如果 403 说明海外也打不开直接剔除
         if e.code == 403 and group in ("📡 央视官方频道", "🏠 全国地方台", "🎮 杰哥咪咕直播"):
             return (group, name, clean_info, url, 9.9)
     except Exception:
@@ -161,7 +157,7 @@ def main():
                         clean_info = re.sub(r'group-title="[^"]*"', f'group-title="{target_group}"', line)
                         if 'group-title=' not in clean_info:
                             clean_info = clean_info.replace("#EXTINF:-1", f'#EXTINF:-1 group-title="{target_group}"')
-                        prefix = clean_info.rsplit(",", 1)[0]
+                        prefix, _, _ = clean_info.rpartition(",")
                         clean_info = f"{prefix},{std_name}"
                         candidates.append((target_group, std_name, clean_info, url))
                 elif "," in line and "#genre#" not in line and not line.startswith("#"):
