@@ -34,7 +34,7 @@ group_rules = [
     },
     {
         "group_name": "🏠 全国地方台",
-        "keywords": ["卫视",  "影视", "都市"]
+        "keywords": ["卫视", "影视"]
     },
     {
         "group_name": "🏝️ 港澳台频道",
@@ -52,7 +52,6 @@ EXCLUDE = re.compile(r"(购物|导视|测试|广播|电台|教育|少儿|动画|
 MAX_LINES_PER_CHANNEL = 5
 
 def normalize_channel_name(group, raw_name):
-    """统一合并央视及港澳台高频频道名称，消除重复方块"""
     name = raw_name.strip()
     upper = name.upper()
     
@@ -100,7 +99,8 @@ def match_group(channel_name):
 def natural_sort_key(item):
     name, clean_info, url, latency = item
     sort_name = name.replace("CCTV-5+", "CCTV-5.5")
-    return ([int(t) if t.isdigit() else t.lower() for t in re.split(r'(\d+\.?\d*)', sort_name)], latency)
+    parts = [int(t) if t.isdigit() else t.lower() for t in re.split(r'(\d+\.?\d*)', sort_name)]
+    return (parts, latency)
 
 def check_stream(item):
     group, name, clean_info, url = item
@@ -138,14 +138,15 @@ def main():
         try:
             req = urllib.request.Request(src, headers={'User-Agent': 'Mozilla/5.0'})
             lines = urllib.request.urlopen(req, timeout=10).read().decode('utf-8', errors='ignore').splitlines()
-            total_lines = len(lines)
-            for idx, raw_line in enumerate(lines):
+            line_iter = iter(lines)
+            for raw_line in line_iter:
                 line = raw_line.strip()
                 if line.startswith("#EXTINF"):
-                    url = lines[idx + 1].strip() if idx + 1 < total_lines else ""
+                    url = next(line_iter, "").strip()
                     if not url.startswith("http") or url in seen_urls:
                         continue
-                    raw_name = line.split(",")[-1].strip()
+                    _, _, raw_name = line.rpartition(",")
+                    raw_name = raw_name.strip()
                     if EXCLUDE.search(raw_name):
                         continue
                     target_group = match_group(raw_name)
@@ -161,7 +162,7 @@ def main():
                         clean_info = f"{prefix},{std_name}"
                         candidates.append((target_group, std_name, clean_info, url))
                 elif "," in line and "#genre#" not in line and not line.startswith("#"):
-                    raw_name, sep, url = line.partition(",")
+                    raw_name, _, url = line.partition(",")
                     raw_name = raw_name.strip()
                     url = url.strip()
                     if not url.startswith("http") or url in seen_urls or EXCLUDE.search(raw_name):
