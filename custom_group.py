@@ -6,7 +6,7 @@ import concurrent.futures
 
 HOST = "https://raw.githubusercontent.com/"
 
-# 1. 纯净高可用源列表（已剔除 404 失效源，仅保留存活的高速双引擎源）
+# 1. 纯净高可用源列表（兼顾无代理国内直连秒开源 + 港澳台高速源）
 SOURCES = [
     HOST + "Guovin/iptv-api/gd/output/result.m3u",
     HOST + "vbskycn/iptv/master/tv/iptv4.m3u",
@@ -39,7 +39,7 @@ group_rules = [
     },
     {
         "group_name": "🏆 体育直播频道",
-        "keywords": ["体育", "足球", "篮球", "赛事", "风云足球", "劲爆体育", "五星体育", "广东体育",  "英超", "NBA",  "博斯"]
+        "keywords": ["体育", "足球", "篮球", "赛事", "风云足球", "劲爆体育", "五星体育", "广东体育", "高尔夫", "英超", "NBA", "爱尔达", "博斯"]
     }
 ]
 
@@ -47,6 +47,9 @@ group_order = ["📡 央视官方频道", "🎮 杰哥咪咕直播", "🏠 全�
 
 EXCLUDE = re.compile(r"(购物|导视|测试|广播|电台|教育|少儿|动画|卡通|戏曲|轮播|解说|宣传|成人|色播|福利|中学生|老故事|怀旧|第一剧场|风云剧场|文化精品|女性时尚|兵器|世界地理|卫生健康|发现之旅)", re.I)
 MAX_LINES_PER_CHANNEL = 5
+
+# 国内外无代理直连秒开高速 CDN 特征（优先排在源1、源2，无小火箭也能秒播）
+DIRECT_FAST_CDN = re.compile(r"(alicdn|aliyuncs|tencent|myqcloud|cdn\.dnsv1|bdydns|baidubce|miguvideo|chinamobile|10086|unicom|10010|chinatelecom|189\.cn|cctv\.com|cntv|ysten|gitv|wasu|bestv|akamaized|cloudfront|fastly)", re.I)
 
 def normalize_channel_name(group, raw_name):
     name = raw_name.strip()
@@ -94,18 +97,25 @@ def match_group(channel_name):
     return None
 
 def natural_sort_key(item):
-    name, clean_info, url, latency = item
-    # 统一转换为纯字符串零填充键（如 CCTV-01, CCTV-05+, CCTV-10），彻底杜绝 int 与 str 比较报错
+    name, clean_info, url, score = item
     if name == "CCTV-5+":
         sort_str = "cctv-05+"
     else:
         sort_str = re.sub(r'(\d+)', lambda m: m.group(1).zfill(4), name.lower())
-    return (sort_str, latency)
+    return (sort_str, score)
 
 def check_stream(item):
     group, name, clean_info, url = item
     if "://[" in url or "$" in url or "|" in url or "php?" in url.lower():
         return None
+    
+    # 计算网络通用性加权（直连高速CDN减分排最前，纯海外依赖代理域名排后作备用）
+    penalty = 0.0
+    if DIRECT_FAST_CDN.search(url):
+        penalty = -0.5
+    elif any(k in url.lower() for k in ("youtube", "googlevideo", "4gtv", "hinet", "tvb")):
+        penalty = 1.5
+
     start = time.time()
     try:
         req = urllib.request.Request(url, headers={
@@ -121,11 +131,11 @@ def check_stream(item):
                     return None
                 if b"#EXTM3U" in chunk and b"#EXT-X-ERROR" in chunk:
                     return None
-                latency = time.time() - start
+                latency = (time.time() - start) + penalty
                 return (group, name, clean_info, url, latency)
     except urllib.error.HTTPError as e:
         if e.code == 403 and group in ("📡 央视官方频道", "🏠 全国地方台", "🎮 杰哥咪咕直播"):
-            return (group, name, clean_info, url, 9.9)
+            return (group, name, clean_info, url, 5.0 + penalty)
     except Exception:
         pass
     return None
@@ -189,13 +199,13 @@ def main():
     valid_groups = {g: [] for g in group_order}
     channel_counts = {}
 
-    for group, name, clean_info, url, latency in tested_items:
+    for group, name, clean_info, url, score in tested_items:
         if group in valid_groups:
             norm_name = re.sub(r'[\s\-_高清超清4KHD]+', '', name.upper())
             count = channel_counts.get((group, norm_name), 0)
             if count < MAX_LINES_PER_CHANNEL:
                 channel_counts[(group, norm_name)] = count + 1
-                valid_groups[group].append((name, clean_info, url, latency))
+                valid_groups[group].append((name, clean_info, url, score))
 
     for group in group_order:
         valid_groups[group].sort(key=natural_sort_key)
