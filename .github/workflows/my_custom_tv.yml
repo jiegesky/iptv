@@ -1,0 +1,31 @@
+name: Build JieGe IPTV
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Run custom filter and speed test
+        run: python custom_group.py
+
+      - name: Commit and Push
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add tv/my_live.m3u tv/my_live.txt
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Auto update JieGe IPTV" && git push)
