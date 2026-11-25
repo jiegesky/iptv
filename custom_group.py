@@ -34,7 +34,7 @@ group_rules = [
     },
     {
         "group_name": "🏠 全国地方台",
-        "keywords": ["卫视","影视","都市"]
+        "keywords": ["卫视", "影视", "都市"]
     },
     {
         "group_name": "🏝️ 港澳台频道",
