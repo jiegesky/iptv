@@ -1,11 +1,12 @@
 import urllib.request
 import urllib.error
 import re
+import time
 import concurrent.futures
 
 HOST = "https://raw.githubusercontent.com/"
 
-# 1. 精选高可用高质量源（剔除冗余超大慢源，确保25秒内快速完成测速）
+# 1. 精选高可用高质量源
 SOURCES = [
     HOST + "mhmdxahmd/mafly/main/MAfly1/mafly.m3u",
     HOST + "mhmdxahmd/mafly/main/youtube.m3u",
@@ -15,7 +16,7 @@ SOURCES = [
     HOST + "YueChan/Live/main/APTV.m3u"
 ]
 
-# 2. 自定义频道分组规则（已删除“文旅”、“珠江”、“大湾区”）
+# 2. 严格保留你的自定义频道分组规则
 group_rules = [
     {
         "group_name": "📡 央视官方频道",
@@ -27,7 +28,7 @@ group_rules = [
     },
     {
         "group_name": "🏠 全国地方台",
-        "keywords": ["卫视", "综合", "新闻", "影视",  "都市"]
+        "keywords": ["卫视",  "影视",  "都市"]
     },
     {
         "group_name": "🏝️ 港澳台频道",
@@ -53,18 +54,30 @@ def match_group(channel_name):
     return None
 
 def natural_sort_key(item):
-    return [int(t) if t.isdigit() else t.lower() for t in re.split(r'(\d+)', item[0])]
+    # 先按频道名自然排序，同名频道按响应耗时从快到慢排序（秒开线路排最前）
+    name = item
+    latency = item
+    return ([int(t) if t.isdigit() else t.lower() for t in re.split(r'(\d+)', name)], latency)
 
 def check_stream(item):
     group, name, clean_info, url = item
+    # 剔除纯 IPv6 地址（避免路由器未开 IPv6 导致一直转圈）
+    if "://[" in url:
+        return None
+    start = time.time()
     try:
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req, timeout=2.5) as resp:
+        with urllib.request.urlopen(req, timeout=2.0) as resp:
             if resp.status in (200, 206, 301, 302):
-                return item
+                # 尝试读取前 512 字节确保视频流真实有数据输出
+                chunk = resp.read(512)
+                if chunk:
+                    latency = time.time() - start
+                    return (group, name, clean_info, url, latency)
     except urllib.error.HTTPError as e:
-        if e.code in (403, 405):
-            return item
+        if e.code == 403:
+            # 仅放行国内大厂 CDN 的海外IP拦截，赋予较高延迟权重排在直连有效源后面
+            return (group, name, clean_info, url, 9.9)
     except Exception:
         pass
     return None
@@ -97,7 +110,7 @@ def main():
                     parts = line.split(",", 1)
                     if len(parts) < 2:
                         continue
-                    name, url = parts[0].strip(), parts[1].strip()
+                    name, url = parts.strip(), parts.strip()
                     if not url.startswith("http") or url in seen_urls or EXCLUDE.search(name):
                         continue
                     target_group = match_group(name)
@@ -108,35 +121,41 @@ def main():
         except Exception as e:
             print(f"跳过源 {src}: {e}")
 
-    valid_groups = {g: [] for g in group_order}
-    channel_counts = {}
-
+    tested_items = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=50) as executor:
         for res in executor.map(check_stream, candidates):
             if res:
-                group, name, clean_info, url = res
-                if group in valid_groups:
-                    norm_name = re.sub(r'[\s\-_高清超清4KHD]+', '', name.upper())
-                    count = channel_counts.get((group, norm_name), 0)
-                    if count < MAX_LINES_PER_CHANNEL:
-                        channel_counts[(group, norm_name)] = count + 1
-                        valid_groups[group].append((name, clean_info, url))
+                tested_items.append(res)
+
+    # 全局按响应速度从快到慢排序，保证每个台优先挑出最快的 5 条
+    tested_items.sort(key=lambda x: x)
+
+    valid_groups = {g: [] for g in group_order}
+    channel_counts = {}
+
+    for group, name, clean_info, url, latency in tested_items:
+        if group in valid_groups:
+            norm_name = re.sub(r'[\s\-_高清超清4KHD]+', '', name.upper())
+            count = channel_counts.get((group, norm_name), 0)
+            if count < MAX_LINES_PER_CHANNEL:
+                channel_counts[(group, norm_name)] = count + 1
+                valid_groups[group].append((name, clean_info, url, latency))
 
     for group in group_order:
         valid_groups[group].sort(key=natural_sort_key)
 
-    epg = HOST + "mhmdxahmd/mafly/main/youtube.xmltv"
+    epg = "https://gh-proxy.org" + HOST + "mhmdxahmd/mafly/main/youtube.xmltv"
     with open("tv/my_live.m3u", "w", encoding="utf-8") as f:
         f.write(f'#EXTM3U x-tvg-url="{epg}"\n')
         for group in group_order:
-            for name, clean_info, url in valid_groups[group]:
+            for name, clean_info, url, _ in valid_groups[group]:
                 f.write(f"{clean_info}\n{url}\n")
 
     with open("tv/my_live.txt", "w", encoding="utf-8") as f:
         for group in group_order:
             if valid_groups[group]:
                 f.write(f"{group},#genre#\n")
-                for name, clean_info, url in valid_groups[group]:
+                for name, clean_info, url, _ in valid_groups[group]:
                     f.write(f"{name},{url}\n")
 
 if __name__ == "__main__":
