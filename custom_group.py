@@ -6,7 +6,7 @@ import concurrent.futures
 
 HOST = "https://raw.githubusercontent.com/"
 
-# 1. 纯净高可用源列表
+# 1. 精选高可用源列表
 SOURCES = [
     HOST + "Guovin/iptv-api/gd/output/result.m3u",
     HOST + "vbskycn/iptv/master/tv/iptv4.m3u",
@@ -31,7 +31,7 @@ group_rules = [
     },
     {
         "group_name": "🏠 全国地方台",
-        "keywords": ["卫视", "影视", "都市"]
+        "keywords": ["卫视"]
     },
     {
         "group_name": "🏝️ 港澳台频道",
@@ -48,7 +48,6 @@ group_order = ["📡 央视官方频道", "🎮 杰哥咪咕直播", "🏠 全�
 EXCLUDE = re.compile(r"(购物|导视|测试|广播|电台|教育|少儿|动画|卡通|戏曲|轮播|解说|宣传|成人|色播|福利|中学生|老故事|怀旧|第一剧场|风云剧场|文化精品|女性时尚|兵器|世界地理|卫生健康|发现之旅)", re.I)
 MAX_LINES_PER_CHANNEL = 5
 
-# 国内外无代理直连秒开高速 CDN 特征（优先排在源1，无小火箭也能秒播）
 DIRECT_FAST_CDN = re.compile(r"(alicdn|aliyuncs|tencent|myqcloud|cdn\.dnsv1|bdydns|baidubce|miguvideo|chinamobile|10086|unicom|10010|chinatelecom|189\.cn|cctv\.com|cntv|ysten|gitv|wasu|bestv|akamaized|cloudfront|fastly)", re.I)
 
 def normalize_channel_name(group, raw_name):
@@ -58,10 +57,8 @@ def normalize_channel_name(group, raw_name):
     if group == "📡 央视官方频道":
         if "欧洲" in name or "美洲" in name:
             return None
-        # 强制匹配 5+（无论叫 CCTV5+、CCTV-5+ 还是 CCTV5体育+ 统一归为 CCTV-5+）
         if re.search(r"CCTV[\s\-_]*0?5\+", upper):
             return "CCTV-5+"
-        # 强制提取数字编号（无论叫 CCTV2、CCTV-2、CCTV 02、CCTV2财经，一律只提取数字变为标准 CCTV-2）
         m = re.search(r"CCTV[\s\-_]*0?(\d+)", upper)
         if m:
             num = int(m.group(1))
@@ -109,8 +106,10 @@ def natural_sort_key(item):
 def check_stream(item):
     group, name, clean_info, url = item
     lower_url = url.lower()
-    # 剔除纯 IPv6、带特殊参数及你当前播放器不支持的 .flv 格式
-    if "://[" in url or "$" in url or "|" in url or "php?" in lower_url or ".flv" in lower_url:
+    # 只允许标准 http/https 协议，剔除纯 IPv6、flv、特殊防盗链参数及内网组播转发链接
+    if not lower_url.startswith(("http://", "https://")):
+        return None
+    if "://[" in url or "$" in url or "|" in url or "php?" in lower_url or ".flv" in lower_url or "/udp/" in lower_url or "/rtp/" in lower_url:
         return None
     
     penalty = 0.0
@@ -124,21 +123,24 @@ def check_stream(item):
         req = urllib.request.Request(url, headers={
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         })
-        with urllib.request.urlopen(req, timeout=2.5) as resp:
-            if resp.status in (200, 206, 301, 302):
+        with urllib.request.urlopen(req, timeout=3.0) as resp:
+            # 严格要求 HTTP 200/206 真实成功响应，彻底拒绝 403/404 假链接
+            if resp.status in (200, 206):
                 content_type = resp.headers.get("Content-Type", "").lower()
-                if "text/html" in content_type or "flv" in content_type:
+                if "text/html" in content_type or "flv" in content_type or "json" in content_type:
                     return None
-                chunk = resp.read(512)
-                if not chunk or b"<html" in chunk.lower() or b"<!doctype" in chunk.lower():
+                chunk = resp.read(1024)
+                if not chunk:
                     return None
-                if b"#EXTM3U" in chunk and b"#EXT-X-ERROR" in chunk:
+                lower_chunk = chunk.lower()
+                if b"<html" in lower_chunk or b"<!doctype" in lower_chunk or b"error" in lower_chunk:
                     return None
+                # 必须是标准 M3U8 切片列表（包含 #EXTM3U 且含 #EXTINF 或 #EXT-X-STREAM-INF）或二进制视频流
+                if b"#EXTM3U" in chunk:
+                    if b"#EXTINF" not in chunk and b"#EXT-X-STREAM-INF" not in chunk:
+                        return None
                 latency = (time.time() - start) + penalty
                 return (group, name, clean_info, url, latency)
-    except urllib.error.HTTPError as e:
-        if e.code == 403 and group in ("📡 央视官方频道", "🏠 全国地方台", "🎮 杰哥咪咕直播"):
-            return (group, name, clean_info, url, 5.0 + penalty)
     except Exception:
         pass
     return None
@@ -168,7 +170,6 @@ def main():
                         if not std_name:
                             continue
                         seen_urls.add(url)
-                        # 重写干净的 EXTINF 行（去掉杂乱的 tvg-name 防止播放器按旧名字拆分方块）
                         clean_info = f'#EXTINF:-1 group-title="{target_group}",{std_name}'
                         candidates.append((target_group, std_name, clean_info, url))
                 elif "," in line and "#genre#" not in line and not line.startswith("#"):
@@ -201,7 +202,6 @@ def main():
 
     for group, name, clean_info, url, score in tested_items:
         if group in valid_groups:
-            # 严格按标准名计数，每个频道最多保留 5 条最快的可用线路
             count = channel_counts.get((group, name), 0)
             if count < MAX_LINES_PER_CHANNEL:
                 channel_counts[(group, name)] = count + 1
