@@ -5,23 +5,17 @@ import concurrent.futures
 
 HOST = "https://raw.githubusercontent.com/"
 
-
-
-# 1. 上游精选源列表（融合 mafly 高质量源 + 公共稳定源，兼容 .m3u 与 .txt）
+# 1. 精选高可用高质量源（剔除冗余超大慢源，确保25秒内快速完成测速）
 SOURCES = [
     HOST + "mhmdxahmd/mafly/main/MAfly1/mafly.m3u",
     HOST + "mhmdxahmd/mafly/main/youtube.m3u",
     HOST + "mhmdxahmd/mafly/main/%E5%90%84TVBOX/4gtv.m3u",
-    HOST + "mhmdxahmd/mafly/main/%E5%90%84TVBOX/1080P_20260720123224.m3u",
-    HOST + "mhmdxahmd/mafly/main/%E5%90%84TVBOX/%E6%98%93%E5%8F%91_20260720104755.m3u",
     HOST + "jiegesky/iptv/master/tv/iptv4.m3u",
-    HOST + "fanmingming/live/main/tv/m3u/ipv6.m3u",
     HOST + "suxuang/myIPTV/main/ipv4.m3u",
-    HOST + "Guovin/iptv-api/gd/output/result.m3u",
     HOST + "YueChan/Live/main/APTV.m3u"
 ]
 
-# 2. 自定义频道分组规则与 Emoji
+# 2. 自定义频道分组规则（已删除“文旅”、“珠江”、“大湾区”）
 group_rules = [
     {
         "group_name": "📡 央视官方频道",
@@ -33,7 +27,7 @@ group_rules = [
     },
     {
         "group_name": "🏠 全国地方台",
-        "keywords": ["卫视", "综合", "新闻", "影视", "生活", "文旅", "珠江", "大湾区", "都市", "公共"]
+        "keywords": ["卫视", "综合", "新闻", "影视",  "都市"]
     },
     {
         "group_name": "🏝️ 港澳台频道",
@@ -59,17 +53,16 @@ def match_group(channel_name):
     return None
 
 def natural_sort_key(item):
-    return [int(t) if t.isdigit() else t.lower() for t in re.split(r'(\d+)', item)]
+    return [int(t) if t.isdigit() else t.lower() for t in re.split(r'(\d+)', item[0])]
 
 def check_stream(item):
     group, name, clean_info, url = item
     try:
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req, timeout=5) as resp:
+        with urllib.request.urlopen(req, timeout=2.5) as resp:
             if resp.status in (200, 206, 301, 302):
                 return item
     except urllib.error.HTTPError as e:
-        # 放行 403/405（国内源防海外服务器探测，但在香港/内地播放器端可正常播放）
         if e.code in (403, 405):
             return item
     except Exception:
@@ -83,7 +76,7 @@ def main():
     for src in SOURCES:
         try:
             req = urllib.request.Request(src, headers={'User-Agent': 'Mozilla/5.0'})
-            lines = urllib.request.urlopen(req, timeout=15).read().decode('utf-8', errors='ignore').splitlines()
+            lines = urllib.request.urlopen(req, timeout=10).read().decode('utf-8', errors='ignore').splitlines()
             for i in range(len(lines)):
                 line = lines[i].strip()
                 if line.startswith("#EXTINF"):
@@ -102,7 +95,9 @@ def main():
                         candidates.append((target_group, name, clean_info, url))
                 elif "," in line and "#genre#" not in line and not line.startswith("#"):
                     parts = line.split(",", 1)
-                    name, url = parts.strip(), parts.strip()
+                    if len(parts) < 2:
+                        continue
+                    name, url = parts[0].strip(), parts[1].strip()
                     if not url.startswith("http") or url in seen_urls or EXCLUDE.search(name):
                         continue
                     target_group = match_group(name)
@@ -116,7 +111,7 @@ def main():
     valid_groups = {g: [] for g in group_order}
     channel_counts = {}
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=30) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=50) as executor:
         for res in executor.map(check_stream, candidates):
             if res:
                 group, name, clean_info, url = res
