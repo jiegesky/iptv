@@ -6,7 +6,7 @@ import concurrent.futures
 
 HOST = "https://raw.githubusercontent.com/"
 
-# 1. 纯净高可用源列表（兼顾无代理国内直连秒开源 + 港澳台高速源）
+# 1. 纯净高可用源列表
 SOURCES = [
     HOST + "Guovin/iptv-api/gd/output/result.m3u",
     HOST + "vbskycn/iptv/master/tv/iptv4.m3u",
@@ -48,7 +48,7 @@ group_order = ["📡 央视官方频道", "🎮 杰哥咪咕直播", "🏠 全�
 EXCLUDE = re.compile(r"(购物|导视|测试|广播|电台|教育|少儿|动画|卡通|戏曲|轮播|解说|宣传|成人|色播|福利|中学生|老故事|怀旧|第一剧场|风云剧场|文化精品|女性时尚|兵器|世界地理|卫生健康|发现之旅)", re.I)
 MAX_LINES_PER_CHANNEL = 5
 
-# 国内外无代理直连秒开高速 CDN 特征（优先排在源1、源2，无小火箭也能秒播）
+# 国内外无代理直连秒开高速 CDN 特征（优先排在源1，无小火箭也能秒播）
 DIRECT_FAST_CDN = re.compile(r"(alicdn|aliyuncs|tencent|myqcloud|cdn\.dnsv1|bdydns|baidubce|miguvideo|chinamobile|10086|unicom|10010|chinatelecom|189\.cn|cctv\.com|cntv|ysten|gitv|wasu|bestv|akamaized|cloudfront|fastly)", re.I)
 
 def normalize_channel_name(group, raw_name):
@@ -58,9 +58,11 @@ def normalize_channel_name(group, raw_name):
     if group == "📡 央视官方频道":
         if "欧洲" in name or "美洲" in name:
             return None
-        if re.search(r"CCTV[\s\-_]*5\+", upper):
+        # 强制匹配 5+（无论叫 CCTV5+、CCTV-5+ 还是 CCTV5体育+ 统一归为 CCTV-5+）
+        if re.search(r"CCTV[\s\-_]*0?5\+", upper):
             return "CCTV-5+"
-        m = re.search(r"CCTV[\s\-_]*(\d+)", upper)
+        # 强制提取数字编号（无论叫 CCTV2、CCTV-2、CCTV 02、CCTV2财经，一律只提取数字变为标准 CCTV-2）
+        m = re.search(r"CCTV[\s\-_]*0?(\d+)", upper)
         if m:
             num = int(m.group(1))
             if 1 <= num <= 17:
@@ -106,14 +108,15 @@ def natural_sort_key(item):
 
 def check_stream(item):
     group, name, clean_info, url = item
-    if "://[" in url or "$" in url or "|" in url or "php?" in url.lower():
+    lower_url = url.lower()
+    # 剔除纯 IPv6、带特殊参数及你当前播放器不支持的 .flv 格式
+    if "://[" in url or "$" in url or "|" in url or "php?" in lower_url or ".flv" in lower_url:
         return None
     
-    # 计算网络通用性加权（直连高速CDN减分排最前，纯海外依赖代理域名排后作备用）
     penalty = 0.0
     if DIRECT_FAST_CDN.search(url):
         penalty = -0.5
-    elif any(k in url.lower() for k in ("youtube", "googlevideo", "4gtv", "hinet", "tvb")):
+    elif any(k in lower_url for k in ("youtube", "googlevideo", "4gtv", "hinet", "tvb")):
         penalty = 1.5
 
     start = time.time()
@@ -124,7 +127,7 @@ def check_stream(item):
         with urllib.request.urlopen(req, timeout=2.5) as resp:
             if resp.status in (200, 206, 301, 302):
                 content_type = resp.headers.get("Content-Type", "").lower()
-                if "text/html" in content_type:
+                if "text/html" in content_type or "flv" in content_type:
                     return None
                 chunk = resp.read(512)
                 if not chunk or b"<html" in chunk.lower() or b"<!doctype" in chunk.lower():
@@ -165,11 +168,8 @@ def main():
                         if not std_name:
                             continue
                         seen_urls.add(url)
-                        clean_info = re.sub(r'group-title="[^"]*"', f'group-title="{target_group}"', line)
-                        if 'group-title=' not in clean_info:
-                            clean_info = clean_info.replace("#EXTINF:-1", f'#EXTINF:-1 group-title="{target_group}"')
-                        prefix, _, _ = clean_info.rpartition(",")
-                        clean_info = f"{prefix},{std_name}"
+                        # 重写干净的 EXTINF 行（去掉杂乱的 tvg-name 防止播放器按旧名字拆分方块）
+                        clean_info = f'#EXTINF:-1 group-title="{target_group}",{std_name}'
                         candidates.append((target_group, std_name, clean_info, url))
                 elif "," in line and "#genre#" not in line and not line.startswith("#"):
                     raw_name, _, url = line.partition(",")
@@ -201,10 +201,10 @@ def main():
 
     for group, name, clean_info, url, score in tested_items:
         if group in valid_groups:
-            norm_name = re.sub(r'[\s\-_高清超清4KHD]+', '', name.upper())
-            count = channel_counts.get((group, norm_name), 0)
+            # 严格按标准名计数，每个频道最多保留 5 条最快的可用线路
+            count = channel_counts.get((group, name), 0)
             if count < MAX_LINES_PER_CHANNEL:
-                channel_counts[(group, norm_name)] = count + 1
+                channel_counts[(group, name)] = count + 1
                 valid_groups[group].append((name, clean_info, url, score))
 
     for group in group_order:
